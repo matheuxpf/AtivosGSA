@@ -3,15 +3,16 @@ import { Layout } from './components/Layout';
 import { Dashboard } from './components/Dashboard';
 import { AssetList } from './components/AssetList';
 import { AssetDetail } from './components/AssetDetail';
+import { MovementHistory } from './components/MovementHistory';
 import { MovementForm } from './components/MovementForm';
 import { AdminPanel } from './components/AdminPanel';
 import { TeamView } from './components/TeamView';
-import { Asset, Movement, ViewState, AssetStatus, OwnerType, Employee, Team, Role } from './types';
-import { supabase } from './lib/supabase'; // Certifica-te de que este ficheiro existe
-import { ArrowRightLeft, Loader2 } from 'lucide-react';
+import { Asset, Movement, ViewState, AssetStatus, AssetState, OwnerType, Employee, Team, Role } from './types';
+import { supabase } from './lib/supabase';
+import { STOCK_OWNER_ID, STOCK_OWNER_NAME } from './constants';
+import { Loader2 } from 'lucide-react';
 
 const App: React.FC = () => {
-  // --- Estados Globais ---
   const [currentView, setCurrentView] = useState<ViewState>('DASHBOARD');
   const [assets, setAssets] = useState<Asset[]>([]);
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -20,23 +21,16 @@ const App: React.FC = () => {
   const [movements, setMovements] = useState<Movement[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // UI State
   const [selectedAssetId, setSelectedAssetId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const [assetsToMove, setAssetsToMove] = useState<Asset[]>([]);
 
-  // --- Procura Inicial de Dados (Supabase) ---
   const fetchData = async () => {
-    setIsLoading(true);
+    // REMOVI O setIsLoading(true) DAQUI. 
+    // Isso evita que a tela pisque e resete o AdminPanel a cada ação.
     try {
-      const [
-        { data: assetsData },
-        { data: employeesData },
-        { data: teamsData },
-        { data: rolesData },
-        { data: movementsData }
-      ] = await Promise.all([
+      const [{ data: aData }, { data: eData }, { data: tData }, { data: rData }, { data: mData }] = await Promise.all([
         supabase.from('assets').select('*'),
         supabase.from('employees').select('*'),
         supabase.from('teams').select('*'),
@@ -44,199 +38,141 @@ const App: React.FC = () => {
         supabase.from('movements').select('*').order('date', { ascending: false })
       ]);
 
-      if (assetsData) setAssets(assetsData);
-      if (employeesData) setEmployees(employeesData);
-      if (teamsData) setTeams(teamsData);
-      if (rolesData) setRoles(rolesData);
-      if (movementsData) setMovements(movementsData);
-    } catch (error) {
-      console.error('Erro ao carregar dados:', error);
-      alert('Erro ao ligar ao Supabase. Verifica a tua configuração.');
-    } finally {
-      setIsLoading(false);
+      setAssets(aData?.map(a => ({
+        id: a.id,
+        type: a.type,
+        brand: a.brand,
+        primaryId: a.primary_id || '',
+        status: a.status as AssetStatus,
+        state: a.physical_condition as AssetState,
+        color: a.color || '',
+        details: a.details || '',
+        value: Number(a.value) || 0,
+        currentOwnerType: a.current_owner_type,
+        currentOwnerId: a.current_owner_id,
+        currentOwnerName: a.current_owner_name,
+        region: a.region
+      })) || []);
+
+      setEmployees(eData?.map(e => ({ id: e.id, name: e.name, role: e.role, region: e.region, teamId: e.team_id, active: e.active })) || []);
+      setTeams(tData?.map(t => ({ id: t.id, name: t.name, region: t.region, channel: t.channel, leaderId: t.leader_id })) || []);
+      setRoles(rData?.map(r => ({ id: r.id, code: r.code, description: r.description, region: r.region, teamId: r.team_id, status: r.status })) || []);
+      setMovements(mData?.map(m => ({
+        id: m.id, assetId: m.asset_id, date: m.date,
+        fromOwnerType: m.from_owner_type, fromOwnerId: m.from_owner_id, fromOwnerName: m.from_owner_name,
+        toOwnerType: m.to_owner_type, toOwnerId: m.to_owner_id, toOwnerName: m.to_owner_name,
+        reason: m.reason, observations: m.observations, registeredBy: m.registered_by
+      })) || []);
+
+    } catch (error) { console.error('Sync Error:', error); } finally { 
+      // Mantemos aqui para garantir que o loading pare na primeira carga
+      setIsLoading(false); 
     }
   };
 
-  useEffect(() => {
-    fetchData();
+  useEffect(() => { 
+    // Definimos o loading como true APENAS na montagem inicial do componente
+    setIsLoading(true);
+    fetchData(); 
   }, []);
 
-  // --- Handlers de Navegação ---
-  const handleNavigate = (view: ViewState) => {
-    setCurrentView(view);
-    if (view !== 'DETAILS') setSelectedAssetId(null);
+  const onUpdateTeam = async (t: Team) => {
+    const { error } = await supabase.from('teams').update({ name: t.name, region: t.region, channel: t.channel, leader_id: t.leaderId }).eq('id', t.id);
+    if (t.leaderId && !error) await supabase.from('employees').update({ team_id: t.id }).eq('id', t.leaderId);
+    fetchData();
   };
 
-  const handleViewDetail = (id: string) => {
-    setSelectedAssetId(id);
-    setCurrentView('DETAILS');
-  };
-
-  const handleInitiateMove = (selectedAssets: Asset[]) => {
-    setAssetsToMove(selectedAssets);
-    setIsMovementModalOpen(true);
-  };
-
-  // --- Lógica Principal de Movimentação em Lote ---
-  const handleConfirmMovement = async (
-    newMovements: Partial<Movement>[], 
-    newStatus: AssetStatus,
-    newOwner: { type: OwnerType, id: string, name: string }
-  ) => {
+  const handleConfirmMovement = async (newMovements: Partial<Movement>[], newStatus: AssetStatus, newOwner: { type: OwnerType, id: string, name: string }) => {
     try {
-      // 1. Inserir registos de movimentação
-      const { error: moveError } = await supabase.from('movements').insert(newMovements);
-      if (moveError) throw moveError;
-
-      // 2. Atualizar o estado de cada ativo selecionado
+      const movementsToInsert = newMovements.map(m => ({
+        asset_id: m.assetId,
+        from_owner_type: m.fromOwnerType, from_owner_id: m.fromOwnerId, from_owner_name: m.fromOwnerName,
+        to_owner_type: m.toOwnerType, to_owner_id: m.toOwnerId, to_owner_name: m.toOwnerName,
+        reason: m.reason, observations: m.observations, registered_by: m.registeredBy, date: m.date
+      }));
+      await supabase.from('movements').insert(movementsToInsert);
+      
       const assetUpdates = newMovements.map(m => 
         supabase.from('assets').update({
-          status: newStatus,
+          status: newStatus, 
           current_owner_type: newOwner.type,
           current_owner_id: newOwner.id,
-          current_owner_name: newOwner.name,
-          region: newOwner.type === OwnerType.FUNCIONARIO 
-            ? (employees.find(e => e.id === newOwner.id)?.region || assets.find(a => a.id === m.assetId)?.region)
-            : assets.find(a => a.id === m.assetId)?.region
+          current_owner_name: newOwner.name
         }).eq('id', m.assetId)
       );
-
       await Promise.all(assetUpdates);
-
-      // 3. Recarregar dados para garantir sincronia
       await fetchData();
-      
       setIsMovementModalOpen(false);
       setAssetsToMove([]);
-      alert(`${newMovements.length} ativo(s) movimentado(s) com sucesso!`);
-    } catch (error) {
-      console.error('Erro na movimentação:', error);
-      alert('Falha ao processar movimentação.');
-    }
+    } catch (error: any) { alert('Erro: ' + error.message); }
   };
-
-  // --- CRUD Handlers (Supabase Sync) ---
-
-  const handleAddAsset = async (newAsset: Asset) => {
-    const { error } = await supabase.from('assets').insert([newAsset]);
-    if (!error) fetchData();
-  };
-
-  const handleUpdateAsset = async (updatedAsset: Asset) => {
-    const { error } = await supabase.from('assets').update(updatedAsset).eq('id', updatedAsset.id);
-    if (!error) fetchData();
-  };
-
-  const handleDeleteAsset = async (id: string) => {
-    const { error } = await supabase.from('assets').delete().eq('id', id);
-    if (!error) fetchData();
-  };
-
-  const handleAddEmployee = async (newEmp: Employee) => {
-    const { error } = await supabase.from('employees').insert([newEmp]);
-    if (!error) fetchData();
-  };
-
-  const handleDeleteEmployee = async (id: string) => {
-    const { error } = await supabase.from('employees').delete().eq('id', id);
-    if (!error) fetchData();
-  };
-
-  // --- Renderização de Conteúdo ---
-  if (isLoading) {
-    return (
-      <div className="h-screen w-full flex items-center justify-center bg-slate-50">
-        <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-12 h-12 text-gsa-blue animate-spin" />
-          <p className="text-slate-600 font-medium">A carregar sistema GSA...</p>
-        </div>
-      </div>
-    );
-  }
 
   const renderContent = () => {
+    if (isLoading) return <div className="h-96 flex items-center justify-center"><Loader2 className="animate-spin text-gsa-blue" size={48} /></div>;
+
     switch (currentView) {
       case 'DASHBOARD': return <Dashboard assets={assets} />;
       case 'ASSETS': return (
         <AssetList 
-          assets={assets} 
-          onViewDetail={handleViewDetail}
-          onInitiateMove={handleInitiateMove}
-          onDelete={handleDeleteAsset}
-          onEdit={() => alert("Usa o painel de Administração para editar ativos.")}
-          searchQuery={searchQuery}
+          assets={assets} onViewDetail={(id) => { setSelectedAssetId(id); setCurrentView('DETAILS'); }}
+          onInitiateMove={(list) => { setAssetsToMove(list); setIsMovementModalOpen(true); }} 
+          onDelete={(id) => supabase.from('assets').delete().eq('id', id).then(fetchData)}
+          onEdit={() => {}} searchQuery={searchQuery}
         />
       );
       case 'DETAILS':
         const asset = assets.find(a => a.id === selectedAssetId);
-        return asset ? <AssetDetail asset={asset} movements={movements} onBack={() => setCurrentView('ASSETS')} /> : <div>Não encontrado</div>;
+        return asset ? <AssetDetail asset={asset} movements={movements} onBack={() => setCurrentView('ASSETS')} /> : null;
       case 'TEAMS': return (
-        <TeamView 
-          teams={teams} employees={employees} assets={assets}
+        <TeamView teams={teams} employees={employees} assets={assets}
           onAddMember={(tId, eId) => supabase.from('employees').update({ team_id: tId }).eq('id', eId).then(fetchData)}
           onRemoveMember={(eId) => supabase.from('employees').update({ team_id: null }).eq('id', eId).then(fetchData)}
           onDeleteTeam={(id) => supabase.from('teams').delete().eq('id', id).then(fetchData)}
-          onEditTeam={(team) => supabase.from('teams').update(team).eq('id', team.id).then(fetchData)}
+          onEditTeam={() => setCurrentView('ADMIN')} 
         />
       );
+      case 'MOVEMENTS': return <MovementHistory movements={movements} assets={assets} />;
       case 'ADMIN': return (
         <AdminPanel 
           assets={assets} employees={employees} teams={teams} roles={roles}
-          onAddAsset={handleAddAsset} onUpdateAsset={handleUpdateAsset} onDeleteAsset={handleDeleteAsset}
-          onAddEmployee={handleAddEmployee} onUpdateEmployee={(emp) => supabase.from('employees').update(emp).eq('id', emp.id).then(fetchData)} onDeleteEmployee={handleDeleteEmployee}
-          onAddTeam={(team) => supabase.from('teams').insert([team]).then(fetchData)} onUpdateTeam={(t) => supabase.from('teams').update(t).eq('id', t.id).then(fetchData)} onDeleteTeam={() => {}} 
-          onAddRole={(role) => supabase.from('roles').insert([role]).then(fetchData)} onUpdateRole={(r) => supabase.from('roles').update(r).eq('id', r.id).then(fetchData)} onDeleteRole={(id) => supabase.from('roles').delete().eq('id', id).then(fetchData)}
+          
+          onAddAsset={(a) => supabase.from('assets').insert([{ 
+            type: a.type, brand: a.brand, primary_id: a.primaryId, 
+            status: AssetStatus.EM_ESTOQUE,
+            physical_condition: a.state, 
+            color: a.color, details: a.details, value: a.value, region: a.region,
+            current_owner_type: OwnerType.ESTOQUE, current_owner_id: STOCK_OWNER_ID, current_owner_name: STOCK_OWNER_NAME 
+          }]).then(fetchData)}
+          
+          onUpdateAsset={(a) => supabase.from('assets').update({ 
+            type: a.type, brand: a.brand, primary_id: a.primaryId, 
+            physical_condition: a.state,
+            color: a.color, details: a.details, value: a.value, region: a.region
+          }).eq('id', a.id).then(fetchData)}
+          
+          onDeleteAsset={(id) => supabase.from('assets').delete().eq('id', id).then(fetchData)}
+          
+          onAddEmployee={(e) => supabase.from('employees').insert([{ name: e.name, role: e.role, region: e.region, team_id: e.teamId, active: true }]).then(fetchData)}
+          onUpdateEmployee={(e) => supabase.from('employees').update({ name: e.name, role: e.role, team_id: e.teamId }).eq('id', e.id).then(fetchData)}
+          onDeleteEmployee={(id) => supabase.from('employees').delete().eq('id', id).then(fetchData)}
+          
+          onAddTeam={(t) => supabase.from('teams').insert([{ name: t.name, region: t.region, channel: t.channel }]).then(fetchData)}
+          onUpdateTeam={onUpdateTeam}
+          onDeleteTeam={(id) => supabase.from('teams').delete().eq('id', id).then(fetchData)}
+          
+          onAddRole={(r) => supabase.from('roles').insert([{ code: r.code, description: r.description, region: r.region, team_id: r.teamId, status: 'VAGA_ABERTA' }]).then(fetchData)}
+          onUpdateRole={(r) => supabase.from('roles').update({ code: r.code, description: r.description, status: r.status }).eq('id', r.id).then(fetchData)}
+          onDeleteRole={(id) => supabase.from('roles').delete().eq('id', id).then(fetchData)}
         />
       );
-      case 'MOVEMENTS':
-        return (
-          <div className="space-y-4">
-            <div className="bg-white p-6 rounded-xl border border-slate-100 flex justify-between items-center shadow-sm">
-              <h2 className="text-xl font-bold text-slate-800">Histórico de Movimentações</h2>
-              <button onClick={() => setCurrentView('ASSETS')} className="bg-gsa-green text-white px-4 py-2 rounded-lg flex items-center hover:bg-lime-600 transition-colors">
-                <ArrowRightLeft size={18} className="mr-2" /> Nova Movimentação
-              </button>
-            </div>
-            <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-              <table className="min-w-full divide-y divide-slate-200">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Data</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Ativo</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Origem</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Destino</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-slate-500 uppercase">Motivo</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {movements.map(m => (
-                    <tr key={m.id} className="hover:bg-slate-50">
-                      <td className="px-6 py-4 text-sm text-slate-500">{new Date(m.date).toLocaleDateString()}</td>
-                      <td className="px-6 py-4 text-sm font-medium text-gsa-blue">{assets.find(a => a.id === m.assetId)?.model || 'Ativo'}</td>
-                      <td className="px-6 py-4 text-sm text-slate-600">{m.fromOwnerName}</td>
-                      <td className="px-6 py-4 text-sm font-semibold">{m.toOwnerName}</td>
-                      <td className="px-6 py-4 text-sm text-slate-600">{m.reason}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        );
-      default: return <div>View não encontrada</div>;
+      default: return null;
     }
   };
 
   return (
-    <Layout currentView={currentView} onNavigate={handleNavigate} onSearch={setSearchQuery} searchValue={searchQuery}>
+    <Layout currentView={currentView} onNavigate={setCurrentView} onSearch={setSearchQuery} searchValue={searchQuery}>
       {renderContent()}
-      {isMovementModalOpen && (
-        <MovementForm 
-          selectedAssets={assetsToMove} employees={employees} 
-          onClose={() => setIsMovementModalOpen(false)} 
-          onSubmit={handleConfirmMovement} 
-        />
-      )}
+      {isMovementModalOpen && <MovementForm selectedAssets={assetsToMove} employees={employees} onClose={() => { setIsMovementModalOpen(false); setAssetsToMove([]); }} onSubmit={handleConfirmMovement} />}
     </Layout>
   );
 };

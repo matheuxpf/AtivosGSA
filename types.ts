@@ -1,25 +1,9 @@
 export enum Region {
-  GO = 'GO',
-  TO = 'TO',
-  MT = 'MT',
-  INDIRETO = 'INDIRETO'
+  GO = 'GO', TO = 'TO', MT = 'MT', INDIRETO = 'INDIRETO', ADM = 'ADM'
 }
 
 export enum Channel {
-  CV = 'CV',
-  ATACADO = 'ATACADO',
-  KEY_ACCOUNT = 'KEY ACCOUNT',
-  ADMIN = 'ADMINISTRATIVO',
-  LOGISTICA = 'LOGÍSTICA'
-}
-
-export enum AssetType {
-  NOTEBOOK = 'NOTEBOOK',
-  DESKTOP = 'DESKTOP',
-  CELULAR = 'CELULAR',
-  TABLET = 'TABLET',
-  ACESSORIO = 'ACESSÓRIO',
-  MONITOR = 'MONITOR'
+  CV = 'CV', ATACADO = 'ATACADO', KEY_ACCOUNT = 'KEY ACCOUNT', ADMIN = 'ADMINISTRATIVO', VETOR = 'VETOR'
 }
 
 export enum AssetStatus {
@@ -30,87 +14,50 @@ export enum AssetStatus {
   PERDIDO = 'PERDIDO'
 }
 
-export enum AssetCondition {
-  NOVO = 'NOVO',
-  BOM = 'BOM',
-  REGULAR = 'REGULAR',
-  RUIM = 'RUIM',
-  SUCATA = 'SUCATA'
-}
+export type AssetState = 'NOVO' | 'USADO' | 'QUEBRADO' | 'COM DEFEITO';
 
 export enum OwnerType {
-  FUNCIONARIO = 'FUNCIONÁRIO',
-  VAGA = 'VAGA',
-  EQUIPE = 'EQUIPE',
-  ESTOQUE = 'ESTOQUE', // TI Inventory
-  MANUTENCAO = 'MANUTENÇÃO' // External or Internal repair
+  FUNCIONARIO = 'FUNCIONÁRIO', VAGA = 'VAGA', EQUIPE = 'EQUIPE', ESTOQUE = 'ESTOQUE', MANUTENCAO = 'MANUTENÇÃO'
 }
 
+export type AssetBrand = 'Samsung' | 'Dell' | 'Lenovo' | 'Apple';
+
 export interface Employee {
-  id: string;
-  name: string;
-  role: string;
-  region: Region;
-  teamId?: string; // Link to Team
-  active: boolean;
+  id: string; name: string; role: string; roleId?: string; region: Region; teamId?: string; active: boolean;
 }
 
 export interface Team {
-  id: string;
-  name: string;
-  region: Region;
-  channel: Channel;
-  leaderId?: string; // Link to Employee (Supervisor)
+  id: string; name: string; region: Region; channel: Channel; leaderId?: string;
 }
 
 export interface Role {
-  id: string;
-  code: string;
-  description: string;
-  region: Region;
-  teamId?: string;
-  status: 'ATIVA' | 'INATIVA' | 'VAGA_ABERTA';
+  id: string; code: string; description: string; region: Region; teamId?: string; status: 'ATIVA' | 'INATIVA' | 'VAGA_ABERTA' | 'OCUPADA';
 }
 
 export interface Asset {
   id: string;
-  type: AssetType;
-  brand: string;
-  model: string;
-  tagPatrimonio?: string;
-  serialNumber?: string;
-  imei1?: string;
-  imei2?: string;
-  status: AssetStatus;
-  condition: AssetCondition;
+  type: string;
+  brand: AssetBrand;
+  primaryId: string;
+  
+  status: AssetStatus;  // ONDE ESTÁ (Enum)
+  state: AssetState;    // COMO ESTÁ (Físico) -> Propriedade 'state'
+  
+  color: string;
+  details: string;
+  value: number;
+  
   currentOwnerType: OwnerType;
-  currentOwnerId: string; // Could be Employee ID, "TI_STOCK", etc.
-  currentOwnerName: string; // Denormalized for easier display
-  region: Region; // Physical location approximation
-  specs?: string; // e.g., "i5 8GB 256SSD"
+  currentOwnerId: string;
+  currentOwnerName: string;
+  region: Region;
 }
 
 export interface Movement {
-  id: string;
-  assetId: string;
-  date: string; // ISO String
-  fromOwnerType: OwnerType;
-  fromOwnerId: string;
-  fromOwnerName: string;
-  toOwnerType: OwnerType;
-  toOwnerId: string;
-  toOwnerName: string;
-  reason: string;
-  observations?: string;
-  registeredBy: string; // User ID
+  id: string; assetId: string; date: string;
+  fromOwnerType: OwnerType; fromOwnerId: string; fromOwnerName: string;
+  toOwnerType: OwnerType; toOwnerId: string; toOwnerName: string;
+  reason: string; observations?: string; registeredBy: string;
 }
 
 export type ViewState = 'DASHBOARD' | 'ASSETS' | 'MOVEMENTS' | 'DETAILS' | 'ADMIN' | 'TEAMS';
-
-// Filter State Interface
-export interface AssetFilter {
-  search: string;
-  type: AssetType | 'ALL';
-  status: AssetStatus | 'ALL';
-  region: Region | 'ALL';
-}
