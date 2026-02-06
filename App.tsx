@@ -27,8 +27,6 @@ const App: React.FC = () => {
   const [assetsToMove, setAssetsToMove] = useState<Asset[]>([]);
 
   const fetchData = async () => {
-    // REMOVI O setIsLoading(true) DAQUI. 
-    // Isso evita que a tela pisque e resete o AdminPanel a cada ação.
     try {
       const [{ data: aData }, { data: eData }, { data: tData }, { data: rData }, { data: mData }] = await Promise.all([
         supabase.from('assets').select('*'),
@@ -42,7 +40,12 @@ const App: React.FC = () => {
         id: a.id,
         type: a.type,
         brand: a.brand,
-        primaryId: a.primary_id || '',
+        
+        // --- MAPEAMENTO DOS NOVOS CAMPOS ---
+        assetTag: a.asset_tag || 'S/TAG', // Etiqueta GSA
+        primaryId: a.primary_id || '',    // Serial ou IMEI
+        // -----------------------------------
+
         status: a.status as AssetStatus,
         state: a.physical_condition as AssetState,
         color: a.color || '',
@@ -54,7 +57,16 @@ const App: React.FC = () => {
         region: a.region
       })) || []);
 
-      setEmployees(eData?.map(e => ({ id: e.id, name: e.name, role: e.role, region: e.region, teamId: e.team_id, active: e.active })) || []);
+      setEmployees(eData?.map(e => ({ 
+        id: e.id, 
+        name: e.name, 
+        role: e.role, 
+        roleId: e.role_id, 
+        region: e.region, 
+        teamId: e.team_id, 
+        active: e.active 
+      })) || []);
+
       setTeams(tData?.map(t => ({ id: t.id, name: t.name, region: t.region, channel: t.channel, leaderId: t.leader_id })) || []);
       setRoles(rData?.map(r => ({ id: r.id, code: r.code, description: r.description, region: r.region, teamId: r.team_id, status: r.status })) || []);
       setMovements(mData?.map(m => ({
@@ -65,21 +77,33 @@ const App: React.FC = () => {
       })) || []);
 
     } catch (error) { console.error('Sync Error:', error); } finally { 
-      // Mantemos aqui para garantir que o loading pare na primeira carga
       setIsLoading(false); 
     }
   };
 
   useEffect(() => { 
-    // Definimos o loading como true APENAS na montagem inicial do componente
     setIsLoading(true);
     fetchData(); 
   }, []);
 
-  const onUpdateTeam = async (t: Team) => {
-    const { error } = await supabase.from('teams').update({ name: t.name, region: t.region, channel: t.channel, leader_id: t.leaderId }).eq('id', t.id);
-    if (t.leaderId && !error) await supabase.from('employees').update({ team_id: t.id }).eq('id', t.leaderId);
-    fetchData();
+  const handleDbOperation = async (operation: any) => {
+    const { error } = await operation;
+    if (error) {
+      alert('Erro na operação: ' + error.message);
+      console.error(error);
+    } else {
+      fetchData();
+    }
+  };
+
+  const onUpdateTeam = (t: Team) => {
+    const update = async () => {
+      const { error } = await supabase.from('teams').update({ name: t.name, region: t.region, channel: t.channel, leader_id: t.leaderId || null }).eq('id', t.id);
+      if (t.leaderId && !error) await supabase.from('employees').update({ team_id: t.id }).eq('id', t.leaderId);
+      if (error) alert(error.message);
+      fetchData();
+    };
+    update();
   };
 
   const handleConfirmMovement = async (newMovements: Partial<Movement>[], newStatus: AssetStatus, newOwner: { type: OwnerType, id: string, name: string }) => {
@@ -116,7 +140,7 @@ const App: React.FC = () => {
         <AssetList 
           assets={assets} onViewDetail={(id) => { setSelectedAssetId(id); setCurrentView('DETAILS'); }}
           onInitiateMove={(list) => { setAssetsToMove(list); setIsMovementModalOpen(true); }} 
-          onDelete={(id) => supabase.from('assets').delete().eq('id', id).then(fetchData)}
+          onDelete={(id) => handleDbOperation(supabase.from('assets').delete().eq('id', id))}
           onEdit={() => {}} searchQuery={searchQuery}
         />
       );
@@ -125,9 +149,9 @@ const App: React.FC = () => {
         return asset ? <AssetDetail asset={asset} movements={movements} onBack={() => setCurrentView('ASSETS')} /> : null;
       case 'TEAMS': return (
         <TeamView teams={teams} employees={employees} assets={assets}
-          onAddMember={(tId, eId) => supabase.from('employees').update({ team_id: tId }).eq('id', eId).then(fetchData)}
-          onRemoveMember={(eId) => supabase.from('employees').update({ team_id: null }).eq('id', eId).then(fetchData)}
-          onDeleteTeam={(id) => supabase.from('teams').delete().eq('id', id).then(fetchData)}
+          onAddMember={(tId, eId) => handleDbOperation(supabase.from('employees').update({ team_id: tId }).eq('id', eId))}
+          onRemoveMember={(eId) => handleDbOperation(supabase.from('employees').update({ team_id: null }).eq('id', eId))}
+          onDeleteTeam={(id) => handleDbOperation(supabase.from('teams').delete().eq('id', id))}
           onEditTeam={() => setCurrentView('ADMIN')} 
         />
       );
@@ -136,33 +160,41 @@ const App: React.FC = () => {
         <AdminPanel 
           assets={assets} employees={employees} teams={teams} roles={roles}
           
-          onAddAsset={(a) => supabase.from('assets').insert([{ 
-            type: a.type, brand: a.brand, primary_id: a.primaryId, 
-            status: AssetStatus.EM_ESTOQUE,
-            physical_condition: a.state, 
-            color: a.color, details: a.details, value: a.value, region: a.region,
+          onAddAsset={(a) => handleDbOperation(supabase.from('assets').insert([{ 
+            type: a.type, brand: a.brand, 
+            asset_tag: a.assetTag,   // Novo
+            primary_id: a.primaryId, // Novo
+            status: AssetStatus.EM_ESTOQUE, physical_condition: a.state, 
+            color: a.color, details: a.details, value: a.value,
             current_owner_type: OwnerType.ESTOQUE, current_owner_id: STOCK_OWNER_ID, current_owner_name: STOCK_OWNER_NAME 
-          }]).then(fetchData)}
+          }]))}
           
-          onUpdateAsset={(a) => supabase.from('assets').update({ 
-            type: a.type, brand: a.brand, primary_id: a.primaryId, 
-            physical_condition: a.state,
-            color: a.color, details: a.details, value: a.value, region: a.region
-          }).eq('id', a.id).then(fetchData)}
+          onUpdateAsset={(a) => handleDbOperation(supabase.from('assets').update({ 
+            type: a.type, brand: a.brand, 
+            asset_tag: a.assetTag,   // Novo
+            primary_id: a.primaryId, // Novo
+            physical_condition: a.state, color: a.color, details: a.details, value: a.value
+          }).eq('id', a.id))}
           
-          onDeleteAsset={(id) => supabase.from('assets').delete().eq('id', id).then(fetchData)}
+          onDeleteAsset={(id) => handleDbOperation(supabase.from('assets').delete().eq('id', id))}
           
-          onAddEmployee={(e) => supabase.from('employees').insert([{ name: e.name, role: e.role, region: e.region, team_id: e.teamId, active: true }]).then(fetchData)}
-          onUpdateEmployee={(e) => supabase.from('employees').update({ name: e.name, role: e.role, team_id: e.teamId }).eq('id', e.id).then(fetchData)}
-          onDeleteEmployee={(id) => supabase.from('employees').delete().eq('id', id).then(fetchData)}
+          onAddEmployee={(e) => handleDbOperation(supabase.from('employees').insert([{ 
+            name: e.name, role: e.role, role_id: e.roleId || null, region: e.region, team_id: e.teamId || null, active: true 
+          }]))}
           
-          onAddTeam={(t) => supabase.from('teams').insert([{ name: t.name, region: t.region, channel: t.channel }]).then(fetchData)}
+          onUpdateEmployee={(e) => handleDbOperation(supabase.from('employees').update({ 
+            name: e.name, role: e.role, role_id: e.roleId || null, region: e.region, team_id: e.teamId || null, active: e.active 
+          }).eq('id', e.id))}
+          
+          onDeleteEmployee={(id) => handleDbOperation(supabase.from('employees').delete().eq('id', id))}
+          
+          onAddTeam={(t) => handleDbOperation(supabase.from('teams').insert([{ name: t.name, region: t.region, channel: t.channel }]))}
           onUpdateTeam={onUpdateTeam}
-          onDeleteTeam={(id) => supabase.from('teams').delete().eq('id', id).then(fetchData)}
+          onDeleteTeam={(id) => handleDbOperation(supabase.from('teams').delete().eq('id', id))}
           
-          onAddRole={(r) => supabase.from('roles').insert([{ code: r.code, description: r.description, region: r.region, team_id: r.teamId, status: 'VAGA_ABERTA' }]).then(fetchData)}
-          onUpdateRole={(r) => supabase.from('roles').update({ code: r.code, description: r.description, status: r.status }).eq('id', r.id).then(fetchData)}
-          onDeleteRole={(id) => supabase.from('roles').delete().eq('id', id).then(fetchData)}
+          onAddRole={(r) => handleDbOperation(supabase.from('roles').insert([{ code: r.code, description: r.description, region: r.region, team_id: r.teamId || null, status: 'VAGA_ABERTA' }]))}
+          onUpdateRole={(r) => handleDbOperation(supabase.from('roles').update({ code: r.code, description: r.description, status: r.status }).eq('id', r.id))}
+          onDeleteRole={(id) => handleDbOperation(supabase.from('roles').delete().eq('id', id))}
         />
       );
       default: return null;

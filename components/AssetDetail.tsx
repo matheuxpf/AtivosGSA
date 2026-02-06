@@ -48,7 +48,6 @@ export const AssetDetail: React.FC<AssetDetailProps> = ({ asset, movements, onBa
            <div className="space-y-2">
              <label className="text-xs font-bold text-slate-400 uppercase">Localização</label>
              <div className="bg-slate-50 p-4 rounded-lg border border-slate-100">
-                <p className="text-sm text-slate-700 mb-1">Região: <b>{asset.region}</b></p>
                 <p className="text-sm text-slate-700">Responsável: <b className="text-gsa-blue">{asset.currentOwnerName}</b></p>
                 <p className="text-xs text-slate-400 mt-1">Status: {asset.status}</p>
              </div>

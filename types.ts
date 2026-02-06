@@ -38,10 +38,12 @@ export interface Asset {
   id: string;
   type: string;
   brand: AssetBrand;
-  primaryId: string;
   
-  status: AssetStatus;  // ONDE ESTÁ (Enum)
-  state: AssetState;    // COMO ESTÁ (Físico) -> Propriedade 'state'
+  assetTag: string;   
+  primaryId: string;  
+  
+  status: AssetStatus;
+  state: AssetState;
   
   color: string;
   details: string;
@@ -50,7 +52,6 @@ export interface Asset {
   currentOwnerType: OwnerType;
   currentOwnerId: string;
   currentOwnerName: string;
-  region: Region;
 }
 
 export interface Movement {
